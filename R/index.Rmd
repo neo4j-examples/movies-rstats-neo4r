@@ -59,7 +59,7 @@ con$get_relationships()
 
 While I do this I'm watching The Godfather, so let's see what we find.
 
-```{r, eval=F}
+```{r}
 "MATCH (m:Movie {title: 'The Godfather'}) RETURN m" %>%
   call_neo4j(con)
 ```
@@ -71,3 +71,46 @@ send_cypher('../data/thegodfather.cypher', con)
 ```
 
 After this we can look for some *Godfatherish* things. 
+
+## The Godfather
+
+The whole story revolves around *The Godfather* of the italian mafia in USA, there's at least two Godfather(s) in all movies.
+
+```{r}
+"WITH '.*Don.*' as param MATCH (p:Person)-[r:ACTED_IN]->(:Movie) WHERE ANY(item IN r.roles WHERE item =~ param) RETURN p" %>%
+  call_neo4j(con)
+```
+
+But we have stories from different family members too:
+
+```{r}
+"WITH '.*Corleone.*' as param MATCH a=((p:Person)-[r:ACTED_IN]->(:Movie)) WHERE ANY(item IN r.roles WHERE item =~ param) RETURN a" %>%
+  call_neo4j(con, type = 'graph') -> corleones
+
+nodes <- corleones$nodes %>%
+  unnest_nodes(what = 'properties')
+
+rels <- corleones$relationships %>%
+  unnest_relationships() %>%
+  select(from = startNode, to = endNode, label = type)
+
+nodes %<>%
+  left_join(corleones$relationships %>%
+              select(startNode, properties) %>%
+              tidyr::unnest(properties) %>%
+              tidyr::unnest(properties) %>% 
+              tidyr::unnest(properties), by = c('id' = 'startNode')) %>%
+  mutate(label = if_else(label == 'Movie', 
+                         title, properties)) %>%
+  distinct(id, .keep_all = T)
+
+visNetwork(nodes, rels) %>%
+  visEdges(arrows = 'to') %>% 
+  visOptions(highlightNearest = TRUE, , nodesIdSelection = TRUE)
+```
+
+We can see we have some nodes repeated and lack of nodes: 
+
+- Vito Corleone is Don Vito when he becomes the Godfather but they are two different actors, so we can see both nodes.
+- Michael Corleone and Don Michael is the same actor in the three movies, but not the same character, getting the unique node ids (required by VisNetwork) we can only see Don Michael Corleone. We would have to change our model to one more sofisticated to get the whole picture!
+

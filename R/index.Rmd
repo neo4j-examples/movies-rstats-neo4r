@@ -1,0 +1,116 @@
+---
+title: "Neo4r"
+description: |
+  neo4j movie database example
+author:
+  - name: Bea Hernández
+date: "`r Sys.Date()`"
+output: radix::radix_article
+params:
+  user: 'neo4j'
+  pass: 'root'
+---
+
+## Install dependencies
+
+Neo4r is already [in CRAN](https://cran.r-project.org/web/packages/neo4r/) but I prefer the GitHub version which has faster updates.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = F, warning = F, echo = T)
+```
+
+```{r load_libraries}
+
+if(!require(neo4r)){
+    remotes::install_github("neo4j-rstats/neo4r")
+    library(neo4r)
+}
+
+if(!require(visNetwork)){
+    install.packages("visNetwork")
+    library(visNetwork)
+}
+
+if(!require(dplyr)){
+    install.packages("dplyr")
+    library(dplyr)
+}
+```
+
+*neo4r* is compatible with the **pipe** grammar but loading *magrittr* and/or *dplyr* is not necesary.
+
+## Set your connection
+
+I already have the movie database loaded on my neo4j database, so I just need to open my connection:
+
+```{r open_connection}
+con <- neo4j_api$new(url = "http://localhost:7474", 
+                       user = params$user, password = params$pass)
+con$ping()
+```
+
+```{r connection, echo = T}
+con$get_version()
+con$get_labels()
+con$get_relationships()
+```
+
+## Let's query 
+
+While I do this I'm watching The Godfather, so let's see what we find.
+
+```{r}
+"MATCH (m:Movie {title: 'The Godfather'}) RETURN m" %>%
+  call_neo4j(con)
+```
+
+There's nothing! We better import some *The Godfather* movies then:
+
+```{r import_thegodfather}
+send_cypher('../data/thegodfather.cypher', con)
+```
+
+After this we can look for some *Godfatherish* things. 
+
+## The Godfather
+
+The whole story revolves around *The Godfather* of the italian mafia in USA, there's at least two Godfather(s) in all movies.
+
+```{r}
+"WITH '.*Don.*' as param MATCH (p:Person)-[r:ACTED_IN]->(:Movie) WHERE ANY(item IN r.roles WHERE item =~ param) RETURN p" %>%
+  call_neo4j(con)
+```
+
+But we have stories from different family members too:
+
+```{r}
+"WITH '.*Corleone.*' as param MATCH a=((p:Person)-[r:ACTED_IN]->(:Movie)) WHERE ANY(item IN r.roles WHERE item =~ param) RETURN a" %>%
+  call_neo4j(con, type = 'graph') -> corleones
+
+nodes <- corleones$nodes %>%
+  unnest_nodes(what = 'properties')
+
+rels <- corleones$relationships %>%
+  unnest_relationships() %>%
+  select(from = startNode, to = endNode, label = type)
+
+nodes %<>%
+  left_join(corleones$relationships %>%
+              select(startNode, properties) %>%
+              tidyr::unnest(properties) %>%
+              tidyr::unnest(properties) %>% 
+              tidyr::unnest(properties), by = c('id' = 'startNode')) %>%
+  mutate(label = if_else(label == 'Movie', 
+                         title, properties)) %>%
+  distinct(id, .keep_all = T)
+
+visNetwork(nodes, rels) %>%
+  visEdges(arrows = 'to') %>% 
+  visOptions(highlightNearest = TRUE, , nodesIdSelection = TRUE)
+```
+
+We can see we have some nodes repeated and lack of nodes: 
+
+- Vito Corleone is Don Vito when he becomes the Godfather but they are two different actors, so we can see both nodes.
+- Michael Corleone and Don Michael is the same actor in the three movies, but not the same character, getting the unique node ids (required by VisNetwork) we can only see Don Michael Corleone. We would have to change our model to one more sofisticated to get the whole picture!
+
